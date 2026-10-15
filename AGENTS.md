@@ -1,12 +1,11 @@
 # Tack agent guidance
 
-For PR screenshots and shareable HTML artifacts, run `curl -s https://tack.<account>.workers.dev/` and follow it. The token is in `$TACK_TOKEN`.
+For PR screenshots and shareable HTML artifacts, run `curl -s https://tack.alecflett.workers.dev/` and follow it. The token is in `$TACK_TOKEN`.
 
-Replace `<account>` with the deployed account's actual workers.dev subdomain.
 Use curl, not fetch. Never print, commit, or put the token in a URL; never
 enable shell tracing or follow redirects with the Authorization header.
-For Claude Code cloud sessions, allow both `tack.<account>.workers.dev` and
-`tack-private.<account>.workers.dev`, and store `TACK_TOKEN` as an environment
+For Claude Code cloud sessions, allow both `tack.alecflett.workers.dev` and
+`tack-private.alecflett.workers.dev`, and store `TACK_TOKEN` as an environment
 secret. Private viewers use Access OTP, not the upload token.
 
 ## Commands

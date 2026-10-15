@@ -9,13 +9,20 @@
   "env": {
     "public": {
       "name": "tack",
-      "vars": { "MODE": "public" },
+      "vars": {
+        "MODE": "public",
+        "PRIVATE_BASE": "https://tack-private.alecflett.workers.dev"
+      },
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "tack" }],
       "triggers": { "crons": ["0 3 * * *"] }
     },
     "private": {
       "name": "tack-private",
-      "vars": { "MODE": "private" },
+      "vars": {
+        "MODE": "private",
+        "ACCESS_TEAM_DOMAIN": "existence-labs.cloudflareaccess.com",
+        "ACCESS_AUD": "1d778bf7a96522f93dba07631922cf9f382885169f43d04e071c5529840ce4a2"
+      },
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "tack" }]
     }
   }

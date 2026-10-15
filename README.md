@@ -122,9 +122,8 @@ Follow the current
 
 The worker independently verifies the `Cf-Access-Jwt-Assertion` JWT using the
 team's remote signing keys: RS256 signature, issuer, audience, expiration, and
-required subject (`sub`). Missing Access configuration returns **503**;
-malformed configuration or missing/invalid assertions return **403** at the
-worker. The Access edge may instead redirect an unauthenticated browser to
+required subject (`sub`). Missing or malformed Access configuration returns
+**503**; missing or invalid assertions return **403** at the worker. The Access edge may instead redirect an unauthenticated browser to
 login. Unknown `MODE` values fail closed with **503**.
 
 To share a private artifact, add the viewer's **exact email** to the Access
