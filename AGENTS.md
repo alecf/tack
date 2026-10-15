@@ -11,7 +11,7 @@ secret. Private viewers use Access OTP, not the upload token.
 
 ## Commands
 
-Run from `/home/runner/work/artifacts/artifacts`:
+Run from the repository root:
 
 ```bash
 bun install --frozen-lockfile
@@ -29,15 +29,15 @@ force `--bun` on Wrangler. The test script uses `bun --bun vitest run`.
 
 ## Files and invariants
 
-* `/home/runner/work/artifacts/artifacts/src/worker.ts`: routing, bearer API,
+* `src/worker.ts`: routing, bearer API,
   Access JWT verification, R2 storage, and expiry cleanup.
-* `/home/runner/work/artifacts/artifacts/src/instructions.md`: curl-readable
+* `src/instructions.md`: curl-readable
   instructions served at the public root.
-* `/home/runner/work/artifacts/artifacts/wrangler.jsonc`: `public` / `tack`
+* `wrangler.jsonc`: `public` / `tack`
   and `private` / `tack-private` share the non-public `tack` R2 bucket.
-* `/home/runner/work/artifacts/artifacts/README.md`: deployment/Access setup,
+* `README.md`: deployment/Access setup,
   API contract, and security decisions.
-* `/home/runner/work/artifacts/artifacts/package.json`: existing commands and
+* `package.json`: existing commands and
   dependency constraints; tests use Vitest 5 with `@cloudflare/vitest-plugin`
   and its Workers pool. Keep their versions compatible.
 

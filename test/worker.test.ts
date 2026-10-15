@@ -9,7 +9,7 @@ import {
   it,
   vi,
 } from "vitest";
-import worker, { type Env, validPath } from "../src/worker";
+import worker, { type Env, saveBoard, validPath } from "../src/worker";
 
 declare global {
   namespace Cloudflare {
@@ -445,12 +445,70 @@ describe("serving and separation", () => {
   it("does not list directories or serve other methods", async () => {
     const b = await board();
     expect((await call(`/b/${b.id}/`)).status).toBe(404);
-    await upload(b.id, "dir/index.html");
     expect((await call(`/b/${b.id}/dir/`)).status).toBe(404);
     expect(
       (await call(`/b/${b.id}/dir/index.html`, { method: "POST" })).status,
     ).toBe(404);
     expect((await call("/unknown")).status).toBe(404);
+  });
+  it("redirects bare board URLs and serves index.html for subdirectories", async () => {
+    const b = await board();
+    await upload(b.id);
+    await upload(b.id, "docs/index.html", "<p>docs</p>");
+    const redirect = await call(`/b/${b.id}`);
+    expect(redirect.status).toBe(301);
+    expect(redirect.headers.get("Location")).toBe(`/b/${b.id}/`);
+    securityHeaders(redirect);
+    expect(await (await call(`/b/${b.id}/docs/`)).text()).toBe("<p>docs</p>");
+    const priv = await board("private");
+    expect((await privateGet(`/p/${priv.id}`)).status).toBe(301);
+    expect((await privateGet(`/p/${priv.id}`, "bad")).status).toBe(403);
+    expect((await call(`/p/${priv.id}`)).status).toBe(404);
+  });
+  it("supports HEAD, ETags and byte ranges", async () => {
+    const b = await board();
+    await upload(b.id, "clip.mp4", "0123456789");
+    const head = await call(`/b/${b.id}/clip.mp4`, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("Content-Length")).toBe("10");
+    expect(head.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(head.headers.get("Content-Type")).toBe("video/mp4");
+    const etag = head.headers.get("ETag") as string;
+    expect(etag).toBeTruthy();
+    expect(
+      (await call(`/b/${b.id}/missing.mp4`, { method: "HEAD" })).status,
+    ).toBe(404);
+    const partial = await call(`/b/${b.id}/clip.mp4`, {
+      headers: { Range: "bytes=2-4" },
+    });
+    expect(partial.status).toBe(206);
+    expect(partial.headers.get("Content-Range")).toBe("bytes 2-4/10");
+    expect(await partial.text()).toBe("234");
+    const open = await call(`/b/${b.id}/clip.mp4`, {
+      headers: { Range: "bytes=7-" },
+    });
+    expect(open.headers.get("Content-Range")).toBe("bytes 7-9/10");
+    expect(await open.text()).toBe("789");
+    const suffix = await call(`/b/${b.id}/clip.mp4`, {
+      headers: { Range: "bytes=-3" },
+    });
+    expect(suffix.headers.get("Content-Range")).toBe("bytes 7-9/10");
+    expect(await suffix.text()).toBe("789");
+    const unchanged = await call(`/b/${b.id}/clip.mp4`, {
+      headers: { "If-None-Match": etag },
+    });
+    expect(unchanged.status).toBe(304);
+    securityHeaders(unchanged);
+    const full = await call(`/b/${b.id}/clip.mp4`);
+    expect(full.status).toBe(200);
+    expect(await full.text()).toBe("0123456789");
+  });
+  it("reports a malformed Access team domain as misconfiguration", async () => {
+    const response = await privateGet("/p/x/", token, {
+      ...privateEnv,
+      ACCESS_TEAM_DOMAIN: "https://tack-tests.cloudflareaccess.com",
+    });
+    expect(response.status).toBe(503);
   });
   it("serves unauthenticated Markdown instructions with the requesting host through the deployed handler", async () => {
     const response = await SELF.fetch("https://another.example/");
@@ -503,7 +561,7 @@ describe("Access JWT verification", () => {
           ACCESS_TEAM_DOMAIN: "attacker.example",
         })
       ).status,
-    ).toBe(403);
+    ).toBe(503);
   });
   it("checks JWTs even on non-file routes and does not accept the API token as Access", async () => {
     expect(
@@ -567,10 +625,11 @@ describe("purge and expiry cron", () => {
     for (const b of [expiredPublic, expiredPrivate, live, forever])
       await upload(b.id);
     for (const b of [expiredPublic, expiredPrivate]) {
-      await env.BUCKET.put(
-        `boards/${b.id}.json`,
-        JSON.stringify({ ...b, expiresAt: new Date(0).toISOString() }),
-      );
+      const { url: _url, ...stored } = b;
+      await saveBoard(env.BUCKET, {
+        ...stored,
+        expiresAt: new Date(0).toISOString(),
+      });
     }
     expect((await call(`/b/${expiredPublic.id}/`)).status).toBe(404);
     expect((await privateGet(`/p/${expiredPrivate.id}/`)).status).toBe(404);
@@ -600,14 +659,12 @@ describe("purge and expiry cron", () => {
             .replaceAll("0", "a")
             .replaceAll("1", "b");
           const id = suffix.padStart(26, "a");
-          return env.BUCKET.put(
-            `boards/${id}.json`,
-            JSON.stringify({
-              ...template,
-              id,
-              expiresAt: new Date(0).toISOString(),
-            }),
-          );
+          const { url: _url, ...stored } = template;
+          return saveBoard(env.BUCKET, {
+            ...stored,
+            id,
+            expiresAt: new Date(0).toISOString(),
+          });
         }),
       );
     }

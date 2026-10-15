@@ -28,8 +28,16 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version-file: package.json
       - run: bun install --frozen-lockfile
+      - name: Check the production vars are committed
+        run: |
+          for var in PRIVATE_BASE ACCESS_TEAM_DOMAIN ACCESS_AUD; do
+            if ! grep -q "\"$var\"" wrangler.jsonc; then
+              echo "::error::$var is missing from wrangler.jsonc (see README setup)"
+              exit 1
+            fi
+          done
       - name: Deploy both workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

@@ -39,7 +39,7 @@ custom domain.
    do not enable an r2.dev URL or attach a public R2 custom domain.
 
 2. The environments in
-   `/home/runner/work/artifacts/artifacts/wrangler.jsonc` already bind `BUCKET`
+   `wrangler.jsonc` already bind `BUCKET`
    to the same `tack` bucket and set `MODE` to `public` or `private`.
    `workers_dev` is enabled and `preview_urls` is `false`. Deploy the private
    worker first:
@@ -99,7 +99,7 @@ Follow the current
    an AUD binding to the worker.
 5. Get your team domain from **Zero Trust settings**. Add these to the private
    environment's vars in
-   `/home/runner/work/artifacts/artifacts/wrangler.jsonc`:
+   `wrangler.jsonc`:
 
    ```jsonc
    // env.private.vars
@@ -112,7 +112,10 @@ Follow the current
 
    `ACCESS_TEAM_DOMAIN` must be the bare hostname: no `https://`, path, or
    trailing slash. `ACCESS_AUD` belongs to this generated private application.
-   These are configuration identifiers, not bearer-token secrets.
+   These are configuration identifiers, not bearer-token secrets. Commit them:
+   the deploy workflow deploys `wrangler.jsonc` as committed (vars set only in
+   the dashboard are replaced on the next deploy) and refuses to deploy while
+   `PRIVATE_BASE`, `ACCESS_TEAM_DOMAIN` or `ACCESS_AUD` is missing.
 6. Run `bun run deploy:private` again. Confirm an unauthenticated browser is
    challenged by Access and your owner email can sign in with an emailed PIN.
    A missing board still returns 404 after successful authentication.
@@ -186,8 +189,10 @@ routes and missing resources return plain-text 404 responses.
 Send `Content-Type: application/json` for board creation. Visibility is explicit
 and cannot be changed after creation. Labels default to empty and may contain
 up to **100 Unicode code points**. IDs contain 26 random base32 characters.
-There is no file-listing UI or general-purpose directory index; only the board
-root falls back to `index.html`. File reads use GET.
+There is no file-listing UI or directory listing. A URL ending in `/` (the board
+root or a subdirectory) serves that directory's `index.html`, and a bare board
+URL without its trailing slash redirects to it. Files support GET and HEAD,
+ETag revalidation (304), and single byte ranges (206), so video plays in Safari.
 
 * Maximum file size: **25 MiB** (26,214,400 bytes), enforced while reading the
   body, including when Content-Length is absent; oversized uploads return 413.

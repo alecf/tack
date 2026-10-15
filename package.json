@@ -21,5 +21,6 @@
     "deploy:public": "wrangler deploy --env public",
     "deploy:private": "wrangler deploy --env private"
   },
-  "type": "module"
+  "type": "module",
+  "packageManager": "bun@1.4.2"
 }

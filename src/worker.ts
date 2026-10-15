@@ -90,10 +90,14 @@ function json(value: unknown, status = 200): Response {
   return Response.json(value, { status });
 }
 
-async function* objects(bucket: R2Bucket, prefix: string) {
+async function* objects(
+  bucket: R2Bucket,
+  prefix: string,
+  include: R2ListOptions["include"] = [],
+) {
   let cursor: string | undefined;
   do {
-    const page = await bucket.list({ prefix, cursor, limit: 1000 });
+    const page = await bucket.list({ prefix, cursor, limit: 1000, include });
     yield page.objects;
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
@@ -103,6 +107,43 @@ async function getBoard(env: Env, id: string): Promise<Board | null> {
   if (!ID.test(id)) return null;
   const object = await env.BUCKET.get(`boards/${id}.json`);
   return object ? object.json<Board>() : null;
+}
+
+// Board fields are mirrored into customMetadata so listing boards (API and cron)
+// needs one R2 list per 1000 boards instead of one GET per board.
+export async function saveBoard(bucket: R2Bucket, board: Board) {
+  await bucket.put(`boards/${board.id}.json`, JSON.stringify(board), {
+    customMetadata: {
+      visibility: board.visibility,
+      label: board.label,
+      createdAt: board.createdAt,
+      expiresAt: board.expiresAt ?? "",
+    },
+  });
+}
+
+async function listBoards(bucket: R2Bucket): Promise<Board[]> {
+  const boards: Board[] = [];
+  for await (const page of objects(bucket, "boards/", ["customMetadata"])) {
+    for (const object of page) {
+      const id = object.key.slice("boards/".length, -".json".length);
+      const meta = object.customMetadata ?? {};
+      if (
+        !ID.test(id) ||
+        (meta.visibility !== "public" && meta.visibility !== "private") ||
+        !meta.createdAt
+      )
+        continue;
+      boards.push({
+        id,
+        visibility: meta.visibility,
+        label: meta.label ?? "",
+        createdAt: meta.createdAt,
+        expiresAt: meta.expiresAt || null,
+      });
+    }
+  }
+  return boards;
 }
 
 function expired(board: Board, now = Date.now()): boolean {
@@ -147,11 +188,14 @@ async function accessAuth(request: Request, env: Env) {
   if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) {
     throw new HttpError(503, "Access is not configured");
   }
+  if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(env.ACCESS_TEAM_DOMAIN)) {
+    throw new HttpError(
+      503,
+      "ACCESS_TEAM_DOMAIN must be a bare <team>.cloudflareaccess.com",
+    );
+  }
   const issuer = `https://${env.ACCESS_TEAM_DOMAIN}`;
   try {
-    if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(env.ACCESS_TEAM_DOMAIN)) {
-      throw new Error("Invalid Access team domain");
-    }
     let jwks = jwksCache.get(issuer);
     if (!jwks) {
       jwks = createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`));
@@ -233,33 +277,33 @@ async function api(
           ttl === null ? null : new Date(now + ttl * 86400000).toISOString(),
       };
       const url = boardUrl(board, request, env);
-      await env.BUCKET.put(`boards/${board.id}.json`, JSON.stringify(board));
+      await saveBoard(env.BUCKET, board);
       return json({ ...board, url }, 201);
     }
     if (request.method === "GET") {
-      const boards = [];
-      for await (const page of objects(env.BUCKET, "boards/")) {
-        for (const object of page) {
-          const metadata = await env.BUCKET.get(object.key);
-          if (!metadata) continue;
-          const board = await metadata.json<Board>();
-          let fileCount = 0;
-          let totalBytes = 0;
-          for await (const files of objects(
-            env.BUCKET,
-            `${board.visibility}/${board.id}/`,
-          )) {
-            fileCount += files.length;
-            totalBytes += files.reduce((sum, file) => sum + file.size, 0);
+      const stats = new Map<
+        string,
+        { fileCount: number; totalBytes: number }
+      >();
+      for (const visibility of ["public", "private"]) {
+        for await (const page of objects(env.BUCKET, `${visibility}/`)) {
+          for (const file of page) {
+            const board = file.key.split("/", 2).join("/");
+            const entry = stats.get(board) ?? { fileCount: 0, totalBytes: 0 };
+            entry.fileCount += 1;
+            entry.totalBytes += file.size;
+            stats.set(board, entry);
           }
-          boards.push({
-            ...board,
-            url: boardUrl(board, request, env),
-            fileCount,
-            totalBytes,
-          });
         }
       }
+      const boards = (await listBoards(env.BUCKET)).map((board) => ({
+        ...board,
+        url: boardUrl(board, request, env),
+        ...(stats.get(`${board.visibility}/${board.id}`) ?? {
+          fileCount: 0,
+          totalBytes: 0,
+        }),
+      }));
       return json(boards);
     }
   }
@@ -311,36 +355,104 @@ async function route(request: Request, env: Env): Promise<Response> {
       });
     }
   }
-  const match = /^\/(b|p)\/([a-z2-7]{26})\/(.*)$/.exec(url.pathname);
   const visibility = env.MODE;
+  const prefix = visibility === "public" ? "b" : "p";
+  const match = /^\/(b|p)\/([a-z2-7]{26})(\/.*)?$/.exec(url.pathname);
   if (
-    request.method === "GET" &&
+    (request.method === "GET" || request.method === "HEAD") &&
     match &&
-    match[1] === (visibility === "public" ? "b" : "p")
+    match[1] === prefix
   ) {
+    if (match[3] === undefined) {
+      return new Response(null, {
+        status: 301,
+        headers: { Location: `/${prefix}/${match[2]}/` },
+      });
+    }
     const board = await getBoard(env, match[2] as string);
-    const path = match[3] || "index.html";
+    let path = match[3].slice(1);
+    if (path === "" || path.endsWith("/")) path += "index.html";
     if (
       board &&
       board.visibility === visibility &&
       !expired(board) &&
       validPath(path)
     ) {
-      const file = await env.BUCKET.get(`${visibility}/${board.id}/${path}`);
-      if (file) {
-        return new Response(file.body, {
-          headers: {
-            "Content-Type": fileType(path),
-            "Cache-Control":
-              visibility === "public"
-                ? "public, max-age=3600"
-                : "private, no-store",
-          },
-        });
+      const response = await serveFile(
+        request,
+        env,
+        `${visibility}/${board.id}/${path}`,
+        path,
+      );
+      if (response) {
+        response.headers.set(
+          "Cache-Control",
+          visibility === "public"
+            ? "public, max-age=3600"
+            : "private, no-store",
+        );
+        return response;
       }
     }
   }
   return new Response("Not found", { status: 404 });
+}
+
+// Serves an R2 object with ETag/conditional and single byte-range support
+// (Safari needs ranges to play video). Returns null when the object is missing.
+async function serveFile(
+  request: Request,
+  env: Env,
+  key: string,
+  path: string,
+): Promise<Response | null> {
+  const headers = new Headers({
+    "Content-Type": fileType(path),
+    "Accept-Ranges": "bytes",
+  });
+  if (request.method === "HEAD") {
+    const head = await env.BUCKET.head(key);
+    if (!head) return null;
+    headers.set("ETag", head.httpEtag);
+    headers.set("Content-Length", String(head.size));
+    return new Response(null, { headers });
+  }
+  const ranged = request.headers.has("Range");
+  let file: R2Object | R2ObjectBody | null;
+  try {
+    file = await env.BUCKET.get(key, {
+      onlyIf: request.headers,
+      ...(ranged ? { range: request.headers } : {}),
+    });
+  } catch {
+    // R2 rejects unsatisfiable or malformed ranges.
+    const head = await env.BUCKET.head(key);
+    if (!head) return null;
+    headers.set("Content-Range", `bytes */${head.size}`);
+    return new Response("Range not satisfiable", { status: 416, headers });
+  }
+  if (!file) return null;
+  headers.set("ETag", file.httpEtag);
+  if (!("body" in file)) return new Response(null, { status: 304, headers });
+  const range = file.range as
+    | { offset?: number; length?: number; suffix?: number }
+    | undefined;
+  if (ranged && range) {
+    const offset =
+      range.suffix !== undefined
+        ? Math.max(0, file.size - range.suffix)
+        : (range.offset ?? 0);
+    const length =
+      range.suffix !== undefined
+        ? file.size - offset
+        : (range.length ?? file.size - offset);
+    headers.set(
+      "Content-Range",
+      `bytes ${offset}-${offset + length - 1}/${file.size}`,
+    );
+    return new Response(file.body, { status: 206, headers });
+  }
+  return new Response(file.body, { headers });
 }
 
 export default {
@@ -365,12 +477,8 @@ export default {
   },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     if (env.MODE !== "public") return;
-    for await (const page of objects(env.BUCKET, "boards/"))
-      for (const object of page) {
-        const metadata = await env.BUCKET.get(object.key);
-        if (!metadata) continue;
-        const board = await metadata.json<Board>();
-        if (expired(board, controller.scheduledTime)) await purge(env, board);
-      }
+    for (const board of await listBoards(env.BUCKET)) {
+      if (expired(board, controller.scheduledTime)) await purge(env, board);
+    }
   },
 } satisfies ExportedHandler<Env>;
