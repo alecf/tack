@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tack",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-15",
+  "workers_dev": true,
+  "preview_urls": false,
+  "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
+  "env": {
+    "public": {
+      "name": "tack",
+      "vars": { "MODE": "public" },
+      "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "tack" }],
+      "triggers": { "crons": ["0 3 * * *"] }
+    },
+    "private": {
+      "name": "tack-private",
+      "vars": { "MODE": "private" },
+      "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "tack" }]
+    }
+  }
+}
