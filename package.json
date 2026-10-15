@@ -1,0 +1,25 @@
+{
+  "name": "tack",
+  "dependencies": {
+    "jose": "^6.2.12"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@cloudflare/vitest-plugin": "^1.4.3",
+    "@cloudflare/workers-types": "^5.20261015.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.151.0"
+  },
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev --env public",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "bun --bun tsc --noEmit",
+    "test": "bun --bun vitest run",
+    "deploy:public": "wrangler deploy --env public",
+    "deploy:private": "wrangler deploy --env private"
+  },
+  "type": "module"
+}
